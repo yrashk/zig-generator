@@ -514,32 +514,6 @@ test "cancel" {
 test "uncooperative cancellation" {
     const expect = std.testing.expect;
     const ty = struct {
-        pub fn generate(self: *@This(), handle: *Handle(u8, void)) !void {
-            _ = self;
-            handle.yield(0) catch |e| {
-                if (e == error.GeneratorCancelled) {}
-            };
-            handle.yield(1) catch |e| {
-                if (e == error.GeneratorCancelled) {}
-            };
-        }
-    };
-
-    const G = Generator(ty, u8);
-
-    var g = G.init(ty{});
-    try expect((try g.next()).? == 0);
-    g.cancel();
-    // it is not cooperating
-    try expect(g.state != .Done);
-    // we have to drain it
-    _ = try g.drain();
-    try expect(g.state == .Done);
-}
-
-test "cooperative cancellation impossibility" {
-    const expect = std.testing.expect;
-    const ty = struct {
         drained: bool = false,
         ignored_termination_0: bool = false,
         ignored_termination_1: bool = false,
