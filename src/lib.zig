@@ -34,6 +34,10 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+pub const Cancellation = error{
+    GeneratorCancelled,
+};
+
 /// Generator handle, to be used in Handle's Ctx type
 pub fn Handle(comptime T: type) type {
     return struct {
@@ -121,6 +125,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
     return struct {
         const Self = @This();
         const Err = ret_tinfo.ErrorUnion.error_set;
+        const CompleteErrorSet = Err || Cancellation;
         pub const Return = ret_tinfo.ErrorUnion.payload;
 
         pub const Context = Ctx;
@@ -149,7 +154,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             return &self.ctx;
         }
 
-        fn generator(self: *Self) @Type(ret_tinfo) {
+        fn generator(self: *Self) CompleteErrorSet!Return {
             defer self.handle.done();
 
             return try generate_fn(&self.ctx, &self.handle);
@@ -185,14 +190,14 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             self.awaitActionable();
 
             if (self.handle.is_done) {
-                self.state = .Done;
                 self.return_value = await self.frame catch |err| error_handler: {
                     switch (err) {
                         error.GeneratorCancelled => {},
-                        else => self.err = err,
+                        else => |e| self.err = e,
                     }
                     break :error_handler null;
                 };
+                self.state = .Done;
 
                 if (self.err) |err| {
                     return err;
@@ -216,6 +221,10 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         /// 
         /// However, it may still continue working until it attempts to yield.
         /// This is possible if the generator is an async function using other async functions.
+        ///
+        /// NOTE that the generator must cooperate (or at least, not get in the way) with its cancellation.
+        /// An uncooperative generator can catch `GeneratorCancelled` error and refuse to be terminated.
+        /// In such case, the generator will be effectively drained upon an attempt to cancel it.
         pub fn cancel(self: *Self) void {
             self.handle.cancel = true;
         }
@@ -395,4 +404,70 @@ test "cancel" {
     try expect(g.state == .Done);
     try expect(!g.context().drained);
     try expect(g.context().cancelled);
+}
+
+test "uncooperative cancellation" {
+    const expect = std.testing.expect;
+    const ty = struct {
+        pub fn generate(self: *@This(), handle: *Handle(u8)) !void {
+            _ = self;
+            handle.yield(0) catch |e| {
+                if (e == error.GeneratorCancelled) {}
+            };
+            handle.yield(1) catch |e| {
+                if (e == error.GeneratorCancelled) {}
+            };
+        }
+    };
+
+    const G = Generator(ty, u8);
+
+    var g = G.init(ty{});
+    try expect((try g.next()).? == 0);
+    g.cancel();
+    // it is not cooperating
+    try expect(g.state != .Done);
+    // we have to drain it
+    _ = try g.drain();
+    try expect(g.state == .Done);
+}
+
+test "cooperative cancellation impossibility" {
+    const expect = std.testing.expect;
+    const ty = struct {
+        drained: bool = false,
+        ignored_termination_0: bool = false,
+        ignored_termination_1: bool = false,
+
+        pub fn generate(self: *@This(), handle: *Handle(u8)) !void {
+            handle.yield(0) catch {
+                self.ignored_termination_0 = true;
+            };
+            handle.yield(1) catch {
+                self.ignored_termination_1 = true;
+            };
+            self.drained = true;
+        }
+    };
+
+    const G = Generator(ty, u8);
+
+    // Cancel before yielding
+    var g = G.init(ty{});
+    g.cancel();
+    try expect((try g.next()) == null);
+    try expect(g.state == .Done);
+    try expect(g.context().drained);
+    try expect(g.context().ignored_termination_0);
+    try expect(g.context().ignored_termination_1);
+
+    // Cancel after yielding
+    g = G.init(ty{});
+    try expect((try g.next()).? == 0);
+    g.cancel();
+    try expect((try g.next()) == null);
+    try expect(g.state == .Done);
+    try expect(g.context().drained);
+    try expect(g.context().ignored_termination_0);
+    try expect(g.context().ignored_termination_1);
 }
