@@ -9,9 +9,9 @@
 //! 
 //! const Ty = struct {
 //!     pub fn generate(_: *@This(), handle: *gen.Handle(u8)) !u8 {
-//!         handle.yield(0);
-//!         handle.yield(1);
-//!         handle.yield(2);
+//!         try handle.yield(0);
+//!         try handle.yield(1);
+//!         try handle.yield(2);
 //!         return 3;
 //!     }
 //! };
@@ -45,9 +45,11 @@ pub fn Handle(comptime T: type) type {
         gen_frame: anyframe = undefined,
         gen_suspended: bool = false,
         yielded: bool = false,
+        cancel: bool = false,
 
         /// Yields a value
-        pub fn yield(self: *Self, t: T) void {
+        pub fn yield(self: *Self, t: T) !void {
+            if (self.cancel) return error.GeneratorCancelled;
             self.next_result = t;
             self.yielded = true;
 
@@ -55,8 +57,8 @@ pub fn Handle(comptime T: type) type {
                 self.frame = @frame();
                 self.resumeGenerator();
             }
-
             self.yielded = false;
+            if (self.cancel) return error.GeneratorCancelled;
         }
 
         fn done(self: *Self) void {
@@ -185,7 +187,10 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             if (self.handle.is_done) {
                 self.state = .Done;
                 self.return_value = await self.frame catch |err| error_handler: {
-                    self.err = err;
+                    switch (err) {
+                        error.GeneratorCancelled => {},
+                        else => self.err = err,
+                    }
                     break :error_handler null;
                 };
 
@@ -204,6 +209,16 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             while (try self.next()) |_| {}
             return &self.return_value.?;
         }
+
+        /// Cancels the generator
+        ///
+        /// It won't yield any more values and will run its deferred code.
+        /// 
+        /// However, it may still continue working until it attempts to yield.
+        /// This is possible if the generator is an async function using other async functions.
+        pub fn cancel(self: *Self) void {
+            self.handle.cancel = true;
+        }
     };
 }
 
@@ -211,9 +226,9 @@ test "basic generator" {
     const expect = std.testing.expect;
     const ty = struct {
         pub fn generate(_: *@This(), handle: *Handle(u8)) !void {
-            handle.yield(0);
-            handle.yield(1);
-            handle.yield(2);
+            try handle.yield(0);
+            try handle.yield(1);
+            try handle.yield(2);
         }
     };
     const G = Generator(ty, u8);
@@ -237,7 +252,7 @@ test "generator with async i/o" {
 
             while (true) {
                 const byte = reader.readByte() catch return;
-                handle.yield(byte);
+                try handle.yield(byte);
             }
         }
     };
@@ -260,9 +275,9 @@ test "context" {
         a: u8 = 1,
 
         pub fn generate(_: *@This(), handle: *Handle(u8)) !void {
-            handle.yield(0);
-            handle.yield(1);
-            handle.yield(2);
+            try handle.yield(0);
+            try handle.yield(1);
+            try handle.yield(2);
         }
     };
 
@@ -276,8 +291,8 @@ test "errors in generators" {
     const expect = std.testing.expect;
     const ty = struct {
         pub fn generate(_: *@This(), handle: *Handle(u8)) !void {
-            handle.yield(0);
-            handle.yield(1);
+            try handle.yield(0);
+            try handle.yield(1);
             return error.SomeError;
         }
     };
@@ -306,9 +321,9 @@ test "return value in generator" {
     const expect = std.testing.expect;
     const ty = struct {
         pub fn generate(_: *@This(), handle: *Handle(u8)) !u8 {
-            handle.yield(0);
-            handle.yield(1);
-            handle.yield(2);
+            try handle.yield(0);
+            try handle.yield(1);
+            try handle.yield(2);
             return 3;
         }
     };
@@ -328,9 +343,9 @@ test "drain" {
     const expect = std.testing.expect;
     const ty = struct {
         pub fn generate(_: *@This(), handle: *Handle(u8)) !u8 {
-            handle.yield(0);
-            handle.yield(1);
-            handle.yield(2);
+            try handle.yield(0);
+            try handle.yield(1);
+            try handle.yield(2);
             return 3;
         }
     };
@@ -340,4 +355,44 @@ test "drain" {
     try expect((try g.drain()).* == 3);
     try expect(g.state == .Done);
     try expect(g.return_value.? == 3);
+}
+
+test "cancel" {
+    const expect = std.testing.expect;
+    const ty = struct {
+        drained: bool = false,
+        cancelled: bool = false,
+
+        pub fn generate(self: *@This(), handle: *Handle(u8)) !u8 {
+            errdefer |e| {
+                if (e == error.GeneratorCancelled) {
+                    self.cancelled = true;
+                }
+            }
+            try handle.yield(0);
+            try handle.yield(1);
+            try handle.yield(2);
+            self.drained = true;
+            return 3;
+        }
+    };
+
+    const G = Generator(ty, u8);
+
+    // cancel before yielding
+    var g = G.init(ty{});
+    g.cancel();
+    try expect((try g.next()) == null);
+    try expect(g.state == .Done);
+    try expect(!g.context().drained);
+    try expect(g.context().cancelled);
+
+    // cancel after yielding
+    g = G.init(ty{});
+    try expect((try g.next()).? == 0);
+    g.cancel();
+    try expect((try g.next()) == null);
+    try expect(g.state == .Done);
+    try expect(!g.context().drained);
+    try expect(g.context().cancelled);
 }

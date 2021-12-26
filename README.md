@@ -18,9 +18,9 @@ const gen = @import("generator");
 
 const Ty = struct {
     pub fn generate(_: *@This(), handle: *gen.Handle(u8)) !u8 {
-        handle.yield(0);
-        handle.yield(1);
-        handle.yield(2);
+        try handle.yield(0);
+        try handle.yield(1);
+        try handle.yield(2);
         return 3;
     }
 };
