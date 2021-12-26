@@ -1,0 +1,4 @@
+*.swp
+zig-*
+.zigmod
+deps.zig
