@@ -81,7 +81,14 @@ pub fn Handle(comptime T: type) type {
 ///
 /// * `generate(self: *@This(), handle: *generator.Handle(T)) !PayloadType`
 ///
-/// where T is the type of value yielded by the generator.
+/// where `T` is the type of value yielded by the generator.
+///
+/// NOTE: In many cases it may be advisable to have `T` be a pointer to a type,
+/// particularly if the the yielded type is larger than a machine word.
+/// This will eliminate the unnecessary copying of the value and may have a positive
+/// impact on performance.
+/// This is also a critical consideration if the generator needs to be able to
+/// observe changes that occurred to the value during suspension.
 pub fn Generator(comptime Ctx: type, comptime T: type) type {
     const ty = @typeInfo(Ctx);
     comptime {
