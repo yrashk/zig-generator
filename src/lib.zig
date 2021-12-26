@@ -48,7 +48,7 @@ pub fn Handle(comptime T: type) type {
         cancel: bool = false,
 
         /// Yields a value
-        pub fn yield(self: *Self, t: T) !void {
+        pub fn yield(self: *Self, t: T) error{GeneratorCancelled}!void {
             if (self.cancel) return error.GeneratorCancelled;
             self.next_result = t;
             self.yielded = true;
