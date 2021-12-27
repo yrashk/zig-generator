@@ -52,7 +52,8 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
         is_done: bool = false,
         // finish() uses to signal this that the resumption is impossible
         no_resume: bool = false,
-        frame: anyframe = undefined,
+        // frame saved by `Handle.yield`
+        frame: *@Frame(yield) = undefined,
         gen_frame: anyframe = undefined,
         gen_suspended: bool = false,
         yielded: bool = false,
