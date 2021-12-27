@@ -50,7 +50,7 @@ pub fn Handle(comptime T: type) type {
 
         const HandleState = enum { Working, Yielded, Cancel };
 
-        frame: *@Frame(yield) = undefined,
+        frame: anyframe = undefined,
         gen_frame: ?anyframe = null,
 
         state: union(HandleState) {
@@ -134,6 +134,58 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             Cancelled: void,
         };
 
+        pub const Runner = struct {
+            generator: *Self,
+            frame: @Frame(generator),
+
+            /// Returns the next yielded value, or `null` if the generator returned or was cancelled.
+            /// `next()` propagates errors returned by the generator function.
+            /// 
+            /// Calling `next()` after it returned `null` is undefined behaviour.
+            ///
+            /// .state.Returned union variant can be used to retrieve the return value of the generator
+            /// .state.Cancelled indicates that the generator was cancelled
+            /// .state.Error union variant can be used to retrieve the error
+            ///
+            pub fn next(runner: *const @This()) Err!?T {
+                var self = runner.generator;
+                std.debug.assert(self.state == .Started);
+                resume self.handle.frame;
+
+                if (self.state == .Started and self.handle.state == .Working) {
+                    suspend {
+                        self.handle.gen_frame = @frame();
+                    }
+                    self.handle.gen_frame = null;
+                }
+
+                switch (self.state) {
+                    .Started => return self.handle.state.Yielded,
+                    .Error => |e| return e,
+                    else => return null,
+                }
+            }
+
+            /// Drains the generator until it is done.
+            pub fn drain(self: *const @This()) !void {
+                while (try self.next()) |_| {}
+            }
+
+            /// Cancels the generator
+            ///
+            /// It won't yield any more values and will run its deferred code.
+            /// 
+            /// However, it may still continue working until it attempts to yield.
+            /// This is possible if the generator is an async function using other async functions.
+            ///
+            /// NOTE that the generator must cooperate (or at least, not get in the way) with its cancellation.
+            /// An uncooperative generator can catch `GeneratorCancelled` error and refuse to be terminated.
+            /// In such case, the generator will be effectively drained upon an attempt to cancel it.
+            pub fn cancel(self: *const @This()) void {
+                self.generator.handle.state = .Cancel;
+            }
+        };
+
         handle: Handle(T) = Handle(T){},
 
         /// Generator's state
@@ -156,6 +208,10 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         }
 
         fn generator(self: *Self) void {
+            self.state = .Started;
+            suspend {
+                self.handle.frame = @frame();
+            }
             if (generate_fn(&self.context, &self.handle)) |val| {
                 self.state = .{ .Returned = val };
             } else |err| {
@@ -175,56 +231,9 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             unreachable;
         }
 
-        /// Returns the next yielded value, or `null` if the generator returned or was cancelled.
-        /// `next()` propagates errors returned by the generator function.
-        ///
-        /// .state.Returned union variant can be used to retrieve the return value of the generator
-        /// .state.Cancelled indicates that the generator was cancelled
-        /// .state.Error union variant can be used to retrieve the error
-        ///
-        pub fn next(self: *Self) Err!?T {
-            switch (self.state) {
-                .Initialized => {
-                    self.state = .Started;
-                    _ = async self.generator();
-                },
-                .Started => {
-                    resume self.handle.frame;
-                },
-                else => return null,
-            }
-
-            if (self.state == .Started and self.handle.state == .Working) {
-                suspend {
-                    self.handle.gen_frame = @frame();
-                }
-                self.handle.gen_frame = null;
-            }
-
-            switch (self.state) {
-                .Started => return self.handle.state.Yielded,
-                .Error => |e| return e,
-                else => return null,
-            }
-        }
-
-        /// Drains the generator until it is done
-        pub fn drain(self: *Self) !void {
-            while (try self.next()) |_| {}
-        }
-
-        /// Cancels the generator
-        ///
-        /// It won't yield any more values and will run its deferred code.
-        /// 
-        /// However, it may still continue working until it attempts to yield.
-        /// This is possible if the generator is an async function using other async functions.
-        ///
-        /// NOTE that the generator must cooperate (or at least, not get in the way) with its cancellation.
-        /// An uncooperative generator can catch `GeneratorCancelled` error and refuse to be terminated.
-        /// In such case, the generator will be effectively drained upon an attempt to cancel it.
-        pub fn cancel(self: *Self) void {
-            self.handle.state = .Cancel;
+        pub fn run(self: *Self) Runner {
+            std.debug.assert(self.state == .Initialized);
+            return Runner{ .generator = self, .frame = async self.generator() };
         }
     };
 }
@@ -241,12 +250,13 @@ test "basic generator" {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
-    try expect((try g.next()).? == 0);
-    try expect((try g.next()).? == 1);
-    try expect((try g.next()).? == 2);
-    try expect((try g.next()) == null);
+    const r = g.run();
+
+    try expect((try r.next()).? == 0);
+    try expect((try r.next()).? == 1);
+    try expect((try r.next()).? == 2);
+    try expect((try r.next()) == null);
     try expect(g.state == .Returned);
-    try expect((try g.next()) == null);
 }
 
 test "generator with async i/o" {
@@ -266,9 +276,11 @@ test "generator with async i/o" {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
+    const r = g.run();
+
     var bytes: usize = 0;
 
-    while (try g.next()) |_| {
+    while (try r.next()) |_| {
         bytes += 1;
     }
 
@@ -292,7 +304,9 @@ test "generator with async await" {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
-    try expect((try g.next()).? == 1);
+    const r = g.run();
+
+    try expect((try r.next()).? == 1);
 }
 
 test "context" {
@@ -326,11 +340,12 @@ test "errors in generators" {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
-    try expect((try g.next()).? == 0);
-    try expect((try g.next()).? == 1);
-    _ = g.next() catch |err| {
+    const r = g.run();
+
+    try expect((try r.next()).? == 0);
+    try expect((try r.next()).? == 1);
+    _ = r.next() catch |err| {
         try expect(g.state == .Error);
-        try expect((try g.next()) == null);
         switch (err) {
             error.SomeError => {
                 return;
@@ -361,11 +376,12 @@ test "return value in generator" {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
-    try expect((try g.next()).? == 0);
-    try expect((try g.next()).? == 1);
-    try expect((try g.next()).? == 2);
-    try expect((try g.next()) == null);
-    try expect(g.state == .Returned);
+    const r = g.run();
+
+    try expect((try r.next()).? == 0);
+    try expect((try r.next()).? == 1);
+    try expect((try r.next()).? == 2);
+    try expect((try r.next()) == null);
     try expect(g.state.Returned == 3);
     try expect(g.context.complete);
 }
@@ -382,8 +398,9 @@ test "drain" {
     };
     const G = Generator(ty, u8);
     var g = G.init(ty{});
+    const r = g.run();
 
-    try g.drain();
+    try r.drain();
     try expect(g.state.Returned == 3);
 }
 
@@ -411,17 +428,19 @@ test "cancel" {
 
     // cancel before yielding
     var g = G.init(ty{});
-    g.cancel();
-    try expect((try g.next()) == null);
+    var r = g.run();
+    r.cancel();
+    try expect((try r.next()) == null);
     try expect(g.state == .Cancelled);
     try expect(!g.context.drained);
     try expect(g.context.cancelled);
 
     // cancel after yielding
     g = G.init(ty{});
-    try expect((try g.next()).? == 0);
-    g.cancel();
-    try expect((try g.next()) == null);
+    r = g.run();
+    try expect((try r.next()).? == 0);
+    r.cancel();
+    try expect((try r.next()) == null);
     try expect(g.state == .Cancelled);
     try expect(!g.context.drained);
     try expect(g.context.cancelled);
@@ -449,8 +468,9 @@ test "uncooperative cancellation" {
 
     // Cancel before yielding
     var g = G.init(ty{});
-    g.cancel();
-    try expect((try g.next()) == null);
+    var r = g.run();
+    r.cancel();
+    try expect((try r.next()) == null);
     try expect(g.state == .Returned);
     try expect(g.context.drained);
     try expect(g.context.ignored_termination_0);
@@ -458,9 +478,11 @@ test "uncooperative cancellation" {
 
     // Cancel after yielding
     g = G.init(ty{});
-    try expect((try g.next()).? == 0);
-    g.cancel();
-    try expect((try g.next()) == null);
+    r = g.run();
+
+    try expect((try r.next()).? == 0);
+    r.cancel();
+    try expect((try r.next()) == null);
     try expect(g.state == .Returned);
     try expect(g.context.drained);
     try expect(g.context.ignored_termination_0);

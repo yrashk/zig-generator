@@ -29,7 +29,9 @@ pub fn benchDrain() !void {
     const G = Generator(ty, u8);
     var g = G.init(ty{ .n = 1 });
 
-    try g.drain();
+    const r = g.run();
+    try r.drain();
+
     try expect(g.state.Returned == 3);
 
     // measure performance
@@ -41,7 +43,8 @@ pub fn benchDrain() !void {
 
         pub fn return_value(n: usize) !void {
             var gen = G.init(ty{ .n = n });
-            try gen.drain();
+            const runner = gen.run();
+            try runner.drain();
             try expect(gen.state.Returned == 3);
         }
     });
@@ -96,7 +99,9 @@ pub fn benchGeneratorVsCallback() !void {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
-    try g.drain();
+    const r = g.run();
+    try r.drain();
+
     try expect(g.state.Returned == 3);
 
     // measure performance
@@ -117,7 +122,8 @@ pub fn benchGeneratorVsCallback() !void {
             var gen = G.init(ty{});
             var frame_buffer: [64]u8 align(@alignOf(@Frame(busy_work.do))) = undefined;
             var result: anyerror!void = undefined;
-            while (try gen.next()) |v| {
+            const runner = gen.run();
+            while (try runner.next()) |v| {
                 try await @asyncCall(&frame_buffer, &result, w, .{v});
             }
             try expect(gen.state.Returned == 3);
