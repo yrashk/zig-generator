@@ -305,9 +305,9 @@ test "generator with async i/o" {
     const expect = std.testing.expect;
     const ty = struct {
         pub fn generate(_: *@This(), handle: *Handle(u8, void)) !void {
-            const bytes = "test" ** 100;
-            var fbs = std.io.fixedBufferStream(bytes);
-            const reader = fbs.reader();
+            const file = try std.fs.cwd()
+                .openFile("README.md", std.fs.File.OpenFlags{ .read = true, .write = false });
+            const reader = file.reader();
 
             while (true) {
                 const byte = reader.readByte() catch return;
@@ -325,6 +325,26 @@ test "generator with async i/o" {
     }
 
     try expect(bytes > 0);
+}
+
+test "generator with async await" {
+    const expect = std.testing.expect;
+    const ty = struct {
+        fn doAsync() callconv(.Async) u8 {
+            suspend {
+                resume @frame();
+            }
+            return 1;
+        }
+
+        pub fn generate(_: *@This(), handle: *Handle(u8, void)) !void {
+            try handle.yield(await async doAsync());
+        }
+    };
+    const G = Generator(ty, u8);
+    var g = G.init(ty{});
+
+    try expect((try g.next()).? == 1);
 }
 
 test "context" {
