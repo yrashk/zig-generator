@@ -7,12 +7,12 @@ pub const io_mode = .evented;
 const expect = std.testing.expect;
 
 pub fn main() !void {
-    try benchReturnVsFinish();
+    try benchDrain();
     try benchGeneratorVsCallback();
 }
 
-pub fn benchReturnVsFinish() !void {
-    std.debug.print("\n=== Benchmark: return vs finish\n", .{});
+pub fn benchDrain() !void {
+    std.debug.print("\n=== Benchmark: generator draining\n", .{});
 
     const ty = struct {
         pub fn generate(_: *@This(), handle: *Handle(u8)) !u8 {
