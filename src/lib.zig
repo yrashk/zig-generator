@@ -80,6 +80,18 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
         ///
         /// NOTE: It is important to understand that if this approach is
         /// used, generator function's deferred code won't run.
+        /// If deferred code is still desired in such situation, one workaround would be
+        /// put generator's code in a block and call `finish` outside of that block (if feasible):
+        /// ```
+        /// pub fn generate(self: *Self, handle: *generator.Handle(u8, u8)) !u8 {
+        ///     {
+        ///       defer self.deinit();
+        ///       try handle.yield(0);
+        ///     }
+        ///     handle.finish(1);
+        ///     unreachable; // necessary until `finish` becomes `noreturn`
+        /// }
+        /// ```
         /// 
         /// Pending resolution of https://github.com/ziglang/zig/issues/5728 should get
         /// `noreturn` as a return type. For now it's just a promise it'll never return.
@@ -391,14 +403,20 @@ test "fast-path return value in generator (finish)" {
     const expect = std.testing.expect;
     const ty = struct {
         complete: bool = false,
+        inner_complete: bool = false,
 
         pub fn generate(self: *@This(), handle: *Handle(u8, u8)) !u8 {
             defer {
                 self.complete = true;
             }
-            try handle.yield(0);
-            try handle.yield(1);
-            try handle.yield(2);
+            {
+                defer {
+                    self.inner_complete = true;
+                }
+                try handle.yield(0);
+                try handle.yield(1);
+                try handle.yield(2);
+            }
             handle.finish(3);
             unreachable;
         }
@@ -415,6 +433,7 @@ test "fast-path return value in generator (finish)" {
     try expect(g.return_value().*.? == 3);
 
     try expect(!g.context().complete);
+    try expect(g.context().inner_complete);
 }
 
 test "drain" {
