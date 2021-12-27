@@ -203,9 +203,12 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         }
 
         fn generator(self: *Self) CompleteErrorSet!Return {
-            defer self.handle.done();
-
-            return try generate_fn(&self.context, &self.handle);
+            var result = generate_fn(&self.context, &self.handle) catch |e| {
+                self.handle.done();
+                return e;
+            };
+            self.handle.finish(result);
+            unreachable;
         }
 
         fn awaitActionable(self: *Self) void {
