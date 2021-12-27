@@ -57,29 +57,31 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
     return struct {
         const Self = @This();
 
-        next_result: T = undefined,
-        gen_state: *StateUnion(Return) = undefined,
+        const HandleState = enum { Working, Yielded, Cancel, Done };
 
-        is_done: bool = false,
-        // frame saved by `Handle.yield`
         frame: *@Frame(yield) = undefined,
-        gen_frame: anyframe = undefined,
-        gen_suspended: bool = false,
-        yielded: bool = false,
-        cancel: bool = false,
+
+        gen_state: *StateUnion(Return) = undefined,
+        gen_frame: ?anyframe = null,
+
+        state: union(HandleState) {
+            Working: void,
+            Yielded: T,
+            Cancel: void,
+            Done: void,
+        } = .Working,
 
         /// Yields a value
         pub fn yield(self: *Self, t: T) error{GeneratorCancelled}!void {
-            if (self.cancel) return error.GeneratorCancelled;
-            self.next_result = t;
-            self.yielded = true;
+            if (self.state == .Cancel) return error.GeneratorCancelled;
 
             suspend {
+                self.state = .{ .Yielded = t };
                 self.frame = @frame();
                 self.resumeGenerator();
             }
-            self.yielded = false;
-            if (self.cancel) return error.GeneratorCancelled;
+            if (self.state == .Cancel) return error.GeneratorCancelled;
+            self.state = .Working;
         }
 
         /// Terminates the generator
@@ -114,15 +116,13 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
         }
 
         fn done(self: *Self) void {
-            self.is_done = true;
-            self.yielded = false;
+            self.state = .Done;
             self.resumeGenerator();
         }
 
         fn resumeGenerator(self: *Self) void {
-            if (self.gen_suspended) {
-                self.gen_suspended = false;
-                resume self.gen_frame;
+            if (self.gen_frame) |frame| {
+                resume frame;
             }
         }
     };
@@ -206,11 +206,12 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         }
 
         fn awaitActionable(self: *Self) void {
-            if (!self.handle.yielded and !self.handle.is_done) {
+            if (self.handle.state == .Working) {
                 suspend {
                     self.handle.gen_frame = @frame();
-                    self.handle.gen_suspended = true;
                 }
+                std.debug.assert(self.handle.state != .Working);
+                self.handle.gen_frame = null;
             }
         }
 
@@ -236,7 +237,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
 
             self.awaitActionable();
 
-            if (self.handle.is_done) {
+            if (self.handle.state == .Done) {
                 var err: ?Err = null;
                 if (@as(State, self.state) != .Done) {
                     self.state = .{ .Done = await self.frame catch |err_| error_handler: {
@@ -256,7 +257,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
                 return null;
             }
 
-            return self.handle.next_result;
+            return self.handle.state.Yielded;
         }
 
         /// Drains the generator until it is done, returning a pointer to `self.state.Done`
@@ -276,7 +277,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         /// An uncooperative generator can catch `GeneratorCancelled` error and refuse to be terminated.
         /// In such case, the generator will be effectively drained upon an attempt to cancel it.
         pub fn cancel(self: *Self) void {
-            self.handle.cancel = true;
+            self.handle.state = .Cancel;
         }
     };
 }
