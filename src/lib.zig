@@ -27,7 +27,8 @@
 //!     std.debug.assert((try g.next()).? == 1);
 //!     std.debug.assert((try g.next()).? == 2);
 //!     std.debug.assert((try g.next()) == null);
-//!     std.debug.assert(g.return_value().*.? == 3);
+//!     std.debug.assert(g.state == .Done);
+//!     std.debug.assert(g.return_value == 3);
 //! }
 //! ```
 
@@ -47,7 +48,7 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
         const Self = @This();
 
         next_result: T = undefined,
-        return_value: ?Return = null,
+        return_value: *Return = undefined,
 
         is_done: bool = false,
         // finish() uses to signal this that the resumption is impossible
@@ -98,7 +99,7 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
         /// `noreturn` as a return type. For now it's just a promise it'll never return.
         pub fn finish(self: *Self, return_value: Return) void {
             suspend {
-                self.return_value = return_value;
+                self.return_value.* = return_value;
                 self.no_resume = true;
                 self.done();
             }
@@ -181,10 +182,11 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         ctx: Ctx,
         err: ?Err = null,
 
-        /// Return value, `null` if the generator function hasn't returned yet
-        pub fn return_value(self: *Self) *?Return {
-            return &self.handle.return_value;
-        }
+        /// Return value
+        ///
+        /// Only valid if `state == .Done` and no error was raised,
+        /// otherwise its value is undefined.
+        return_value: Return = undefined,
 
         /// Initializes a generator
         pub fn init(ctx: Ctx) Self {
@@ -224,6 +226,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             switch (self.state) {
                 .Initialized => {
                     self.state = .Started;
+                    self.handle.return_value = &self.return_value;
                     self.frame = async self.generator();
                 },
                 .Started => {
@@ -236,12 +239,12 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
 
             if (self.handle.is_done) {
                 if (!self.handle.no_resume) {
-                    self.handle.return_value = await self.frame catch |err| error_handler: {
+                    self.return_value = await self.frame catch |err| error_handler: {
                         switch (err) {
                             error.GeneratorCancelled => {},
                             else => |e| self.err = e,
                         }
-                        break :error_handler null;
+                        break :error_handler undefined;
                     };
                 }
                 self.state = .Done;
@@ -259,7 +262,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         /// Drains the generator until it is done, returning a pointer to `self.return_value`
         pub fn drain(self: *Self) !*Return {
             while (try self.next()) |_| {}
-            return &self.return_value().*.?;
+            return &self.return_value;
         }
 
         /// Cancels the generator
@@ -393,10 +396,9 @@ test "return value in generator" {
     try expect((try g.next()).? == 0);
     try expect((try g.next()).? == 1);
     try expect((try g.next()).? == 2);
-    try expect(g.return_value().* == null);
     try expect((try g.next()) == null);
     try expect(g.state == .Done);
-    try expect(g.return_value().*.? == 3);
+    try expect(g.return_value == 3);
     try expect(g.context().complete);
 }
 
@@ -428,10 +430,9 @@ test "fast-path return value in generator (finish)" {
     try expect((try g.next()).? == 0);
     try expect((try g.next()).? == 1);
     try expect((try g.next()).? == 2);
-    try expect(g.return_value().* == null);
     try expect((try g.next()) == null);
     try expect(g.state == .Done);
-    try expect(g.return_value().*.? == 3);
+    try expect(g.return_value == 3);
 
     try expect(!g.context().complete);
     try expect(g.context().inner_complete);
@@ -452,7 +453,7 @@ test "drain" {
 
     try expect((try g.drain()).* == 3);
     try expect(g.state == .Done);
-    try expect(g.return_value().*.? == 3);
+    try expect(g.return_value == 3);
 }
 
 test "cancel" {
