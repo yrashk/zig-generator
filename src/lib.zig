@@ -214,10 +214,9 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             }
         }
 
-        /// Drains the generator until it is done, returning a pointer to `self.state.Returned`
-        pub fn drain(self: *Self) !*Return {
+        /// Drains the generator until it is done
+        pub fn drain(self: *Self) !void {
             while (try self.next()) |_| {}
-            return &self.state.Returned;
         }
 
         /// Cancels the generator
@@ -390,8 +389,7 @@ test "drain" {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
-    try expect((try g.drain()).* == 3);
-    try expect(g.state == .Returned);
+    try g.drain();
     try expect(g.state.Returned == 3);
 }
 

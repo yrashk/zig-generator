@@ -27,7 +27,7 @@ pub fn benchDrain() !void {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
-    _ = try g.drain();
+    try g.drain();
     try expect(g.state.Returned == 3);
 
     // measure performance
@@ -36,7 +36,7 @@ pub fn benchDrain() !void {
     try bench.benchmark(struct {
         pub fn return_value() !void {
             var gen = G.init(ty{});
-            _ = try gen.drain();
+            try gen.drain();
             try expect(gen.state.Returned == 3);
         }
     });
@@ -91,7 +91,7 @@ pub fn benchGeneratorVsCallback() !void {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
-    _ = try g.drain();
+    try g.drain();
     try expect(g.state.Returned == 3);
 
     // measure performance
