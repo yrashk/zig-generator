@@ -192,24 +192,20 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
 
         frame: @Frame(generator) = undefined,
 
-        ctx: Ctx,
+        /// Generator's own structure
+        context: Context,
 
         /// Initializes a generator
         pub fn init(ctx: Ctx) Self {
             return Self{
-                .ctx = ctx,
+                .context = ctx,
             };
-        }
-
-        /// Returns the underline context
-        pub fn context(self: *Self) *Ctx {
-            return &self.ctx;
         }
 
         fn generator(self: *Self) CompleteErrorSet!Return {
             defer self.handle.done();
 
-            return try generate_fn(&self.ctx, &self.handle);
+            return try generate_fn(&self.context, &self.handle);
         }
 
         fn awaitActionable(self: *Self) void {
@@ -371,7 +367,7 @@ test "context" {
     const G = Generator(ty, u8);
     var g = G.init(ty{});
 
-    try expect(g.context().a == 1);
+    try expect(g.context.a == 1);
 }
 
 test "errors in generators" {
@@ -427,7 +423,7 @@ test "return value in generator" {
     try expect((try g.next()) == null);
     try expect(g.state == .Returned);
     try expect(g.state.Returned == 3);
-    try expect(g.context().complete);
+    try expect(g.context.complete);
 }
 
 test "fast-path return value in generator (finish)" {
@@ -462,8 +458,8 @@ test "fast-path return value in generator (finish)" {
     try expect(g.state == .Returned);
     try expect(g.state.Returned == 3);
 
-    try expect(!g.context().complete);
-    try expect(g.context().inner_complete);
+    try expect(!g.context.complete);
+    try expect(g.context.inner_complete);
 }
 
 test "drain" {
@@ -511,8 +507,8 @@ test "cancel" {
     g.cancel();
     try expect((try g.next()) == null);
     try expect(g.state == .Returned);
-    try expect(!g.context().drained);
-    try expect(g.context().cancelled);
+    try expect(!g.context.drained);
+    try expect(g.context.cancelled);
 
     // cancel after yielding
     g = G.init(ty{});
@@ -520,8 +516,8 @@ test "cancel" {
     g.cancel();
     try expect((try g.next()) == null);
     try expect(g.state == .Returned);
-    try expect(!g.context().drained);
-    try expect(g.context().cancelled);
+    try expect(!g.context.drained);
+    try expect(g.context.cancelled);
 }
 
 test "uncooperative cancellation" {
@@ -549,9 +545,9 @@ test "uncooperative cancellation" {
     g.cancel();
     try expect((try g.next()) == null);
     try expect(g.state == .Returned);
-    try expect(g.context().drained);
-    try expect(g.context().ignored_termination_0);
-    try expect(g.context().ignored_termination_1);
+    try expect(g.context.drained);
+    try expect(g.context.ignored_termination_0);
+    try expect(g.context.ignored_termination_1);
 
     // Cancel after yielding
     g = G.init(ty{});
@@ -559,7 +555,7 @@ test "uncooperative cancellation" {
     g.cancel();
     try expect((try g.next()) == null);
     try expect(g.state == .Returned);
-    try expect(g.context().drained);
-    try expect(g.context().ignored_termination_0);
-    try expect(g.context().ignored_termination_1);
+    try expect(g.context.drained);
+    try expect(g.context.ignored_termination_0);
+    try expect(g.context.ignored_termination_1);
 }
