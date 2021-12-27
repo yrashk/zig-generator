@@ -77,6 +77,9 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
         /// This approach is faster than returning from an async function, so
         /// if performance of finishing the generator is important, one should use this function
         /// instead of function return flow.
+        ///
+        /// NOTE: It is important to understand that if this approach is
+        /// used, generator function's deferred code won't run.
         /// 
         /// Pending resolution of https://github.com/ziglang/zig/issues/5728 should get
         /// `noreturn` as a return type. For now it's just a promise it'll never return.
@@ -360,7 +363,11 @@ test "errors in generators" {
 test "return value in generator" {
     const expect = std.testing.expect;
     const ty = struct {
-        pub fn generate(_: *@This(), handle: *Handle(u8, u8)) !u8 {
+        complete: bool = false,
+        pub fn generate(self: *@This(), handle: *Handle(u8, u8)) !u8 {
+            defer {
+                self.complete = true;
+            }
             try handle.yield(0);
             try handle.yield(1);
             try handle.yield(2);
@@ -377,12 +384,18 @@ test "return value in generator" {
     try expect((try g.next()) == null);
     try expect(g.state == .Done);
     try expect(g.return_value().*.? == 3);
+    try expect(g.context().complete);
 }
 
 test "fast-path return value in generator (finish)" {
     const expect = std.testing.expect;
     const ty = struct {
-        pub fn generate(_: *@This(), handle: *Handle(u8, u8)) !u8 {
+        complete: bool = false,
+
+        pub fn generate(self: *@This(), handle: *Handle(u8, u8)) !u8 {
+            defer {
+                self.complete = true;
+            }
             try handle.yield(0);
             try handle.yield(1);
             try handle.yield(2);
@@ -400,6 +413,8 @@ test "fast-path return value in generator (finish)" {
     try expect((try g.next()) == null);
     try expect(g.state == .Done);
     try expect(g.return_value().*.? == 3);
+
+    try expect(!g.context().complete);
 }
 
 test "drain" {
