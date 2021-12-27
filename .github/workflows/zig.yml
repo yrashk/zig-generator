@@ -17,7 +17,11 @@ jobs:
       - uses: goto-bus-stop/setup-zig@v1
         with:
           version: master
+
+      - run: zig version
+      - run: zig env
       - uses: nektro/actions-setup-zigmod@v1
+      - run: zigmod version
       - run: zigmod ci
       - run: zig build test
   lint:
