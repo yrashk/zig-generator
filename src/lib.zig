@@ -27,7 +27,7 @@
 //!     std.debug.assert((try g.next()).? == 1);
 //!     std.debug.assert((try g.next()).? == 2);
 //!     std.debug.assert((try g.next()) == null);
-//!     std.debug.assert(g.state.Done == 3);
+//!     std.debug.assert(g.state.Returned == 3);
 //! }
 //! ```
 
@@ -38,14 +38,14 @@ pub const Cancellation = error{
     GeneratorCancelled,
 };
 
-pub const State = enum { Initialized, Started, Error, Done };
+pub const State = enum { Initialized, Started, Error, Returned };
 
 fn StateUnion(comptime Return: type) type {
     return union(State) {
         Initialized: void,
         Started: void,
         Error: void,
-        Done: Return,
+        Returned: Return,
     };
 }
 
@@ -57,7 +57,7 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
     return struct {
         const Self = @This();
 
-        const HandleState = enum { Working, Yielded, Cancel, Done };
+        const HandleState = enum { Working, Yielded, Cancel, Returned };
 
         frame: *@Frame(yield) = undefined,
 
@@ -68,7 +68,7 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
             Working: void,
             Yielded: T,
             Cancel: void,
-            Done: void,
+            Returned: void,
         } = .Working,
 
         /// Yields a value
@@ -109,14 +109,14 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
         /// `noreturn` as a return type. For now it's just a promise it'll never return.
         pub fn finish(self: *Self, return_value: Return) void {
             suspend {
-                self.gen_state.* = .{ .Done = return_value };
+                self.gen_state.* = .{ .Returned = return_value };
                 self.done();
             }
             unreachable;
         }
 
         fn done(self: *Self) void {
-            self.state = .Done;
+            self.state = .Returned;
             self.resumeGenerator();
         }
 
@@ -181,6 +181,13 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         pub const Context = Ctx;
 
         handle: Handle(T, Return) = Handle(T, Return){},
+
+        /// Generator's state
+        /// 
+        /// * `.Initialized` -- it hasn't been started yet
+        /// * `.Started` -- it has been started
+        /// * `.Returned` -- it has returned a value
+        /// * `.Error` -- it has returned an error
         state: StateUnion(Return) = .Initialized,
 
         frame: @Frame(generator) = undefined,
@@ -217,7 +224,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
 
         /// Returns the next yielded value, or `null` if the generator has completed
         ///
-        /// .state.Done union variant can be used to retrieve the return value of the generator
+        /// .state.Returned union variant can be used to retrieve the return value of the generator
         /// once it has completed.
         ///
         /// `next()` also propagates errors returned by the generator function.
@@ -232,15 +239,15 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
                     resume self.handle.frame;
                 },
                 .Error => return null,
-                .Done => return null,
+                .Returned => return null,
             }
 
             self.awaitActionable();
 
-            if (self.handle.state == .Done) {
+            if (self.handle.state == .Returned) {
                 var err: ?Err = null;
-                if (@as(State, self.state) != .Done) {
-                    self.state = .{ .Done = await self.frame catch |err_| error_handler: {
+                if (@as(State, self.state) != .Returned) {
+                    self.state = .{ .Returned = await self.frame catch |err_| error_handler: {
                         switch (err_) {
                             error.GeneratorCancelled => {},
                             else => |e| err = e,
@@ -260,10 +267,10 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             return self.handle.state.Yielded;
         }
 
-        /// Drains the generator until it is done, returning a pointer to `self.state.Done`
+        /// Drains the generator until it is done, returning a pointer to `self.state.Returned`
         pub fn drain(self: *Self) !*Return {
             while (try self.next()) |_| {}
-            return &self.state.Done;
+            return &self.state.Returned;
         }
 
         /// Cancels the generator
@@ -298,7 +305,7 @@ test "basic generator" {
     try expect((try g.next()).? == 1);
     try expect((try g.next()).? == 2);
     try expect((try g.next()) == null);
-    try expect(g.state == .Done);
+    try expect(g.state == .Returned);
     try expect((try g.next()) == null);
 }
 
@@ -418,8 +425,8 @@ test "return value in generator" {
     try expect((try g.next()).? == 1);
     try expect((try g.next()).? == 2);
     try expect((try g.next()) == null);
-    try expect(g.state == .Done);
-    try expect(g.state.Done == 3);
+    try expect(g.state == .Returned);
+    try expect(g.state.Returned == 3);
     try expect(g.context().complete);
 }
 
@@ -452,8 +459,8 @@ test "fast-path return value in generator (finish)" {
     try expect((try g.next()).? == 1);
     try expect((try g.next()).? == 2);
     try expect((try g.next()) == null);
-    try expect(g.state == .Done);
-    try expect(g.state.Done == 3);
+    try expect(g.state == .Returned);
+    try expect(g.state.Returned == 3);
 
     try expect(!g.context().complete);
     try expect(g.context().inner_complete);
@@ -473,8 +480,8 @@ test "drain" {
     var g = G.init(ty{});
 
     try expect((try g.drain()).* == 3);
-    try expect(g.state == .Done);
-    try expect(g.state.Done == 3);
+    try expect(g.state == .Returned);
+    try expect(g.state.Returned == 3);
 }
 
 test "cancel" {
@@ -503,7 +510,7 @@ test "cancel" {
     var g = G.init(ty{});
     g.cancel();
     try expect((try g.next()) == null);
-    try expect(g.state == .Done);
+    try expect(g.state == .Returned);
     try expect(!g.context().drained);
     try expect(g.context().cancelled);
 
@@ -512,7 +519,7 @@ test "cancel" {
     try expect((try g.next()).? == 0);
     g.cancel();
     try expect((try g.next()) == null);
-    try expect(g.state == .Done);
+    try expect(g.state == .Returned);
     try expect(!g.context().drained);
     try expect(g.context().cancelled);
 }
@@ -541,7 +548,7 @@ test "uncooperative cancellation" {
     var g = G.init(ty{});
     g.cancel();
     try expect((try g.next()) == null);
-    try expect(g.state == .Done);
+    try expect(g.state == .Returned);
     try expect(g.context().drained);
     try expect(g.context().ignored_termination_0);
     try expect(g.context().ignored_termination_1);
@@ -551,7 +558,7 @@ test "uncooperative cancellation" {
     try expect((try g.next()).? == 0);
     g.cancel();
     try expect((try g.next()) == null);
-    try expect(g.state == .Done);
+    try expect(g.state == .Returned);
     try expect(g.context().drained);
     try expect(g.context().ignored_termination_0);
     try expect(g.context().ignored_termination_1);
