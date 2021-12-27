@@ -162,7 +162,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         err: ?Err = null,
 
         /// Return value, `null` if the generator function hasn't returned yet
-        fn return_value(self: *Self) *?Return {
+        pub fn return_value(self: *Self) *?Return {
             return &self.handle.return_value;
         }
 
