@@ -20,7 +20,9 @@ jobs:
 
       - run: zig version
       - run: zig env
-      - uses: nektro/actions-setup-zigmod@v1
+      - uses: yrashk/actions-setup-zigmod@v1_1
+        with:
+          version: v89
       - run: zigmod version
       - run: zigmod ci
       - run: zig build test
