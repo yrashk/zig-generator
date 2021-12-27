@@ -27,7 +27,7 @@
 //!     std.debug.assert((try g.next()).? == 1);
 //!     std.debug.assert((try g.next()).? == 2);
 //!     std.debug.assert((try g.next()) == null);
-//!     std.debug.assert(g.return_value.? == 3);
+//!     std.debug.assert(g.return_value().*.? == 3);
 //! }
 //! ```
 
