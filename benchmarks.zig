@@ -35,15 +35,13 @@ pub fn benchReturnVsFinish() !void {
     var g = G.init(ty{});
 
     _ = try g.drain();
-    try expect(g.state == .Done);
-    try expect(g.return_value().*.? == 3);
+    try expect(g.state.Done == 3);
 
     const Gf = Generator(tyFinish, u8);
     var gf = Gf.init(tyFinish{});
 
     _ = try gf.drain();
-    try expect(gf.state == .Done);
-    try expect(gf.return_value().*.? == 3);
+    try expect(gf.state.Done == 3);
 
     // measure performance
 
@@ -52,14 +50,12 @@ pub fn benchReturnVsFinish() !void {
         pub fn return_value() !void {
             var gen = G.init(ty{});
             _ = try gen.drain();
-            try expect(gen.state == .Done);
-            try expect(gen.return_value().*.? == 3);
+            try expect(gen.state.Done == 3);
         }
         pub fn finish() !void {
             var gen = Gf.init(tyFinish{});
             _ = try gen.drain();
-            try expect(gen.state == .Done);
-            try expect(gen.return_value().*.? == 3);
+            try expect(gen.state.Done == 3);
         }
     });
 }
