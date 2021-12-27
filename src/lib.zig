@@ -39,6 +39,9 @@ pub const Cancellation = error{
 };
 
 /// Generator handle, to be used in Handle's Ctx type
+///
+/// `T` is the type that the generator yields
+/// `Return` is generator's return type
 pub fn Handle(comptime T: type, comptime Return: type) type {
     return struct {
         const Self = @This();
@@ -106,9 +109,10 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
 ///
 /// Ctx type must be a struct and it must have the following function:
 ///
-/// * `generate(self: *@This(), handle: *generator.Handle(T, PayloadType)) !PayloadType`
+/// * `generate(self: *@This(), handle: *generator.Handle(T, Return)) !Return`
 ///
-/// where `T` is the type of value yielded by the generator.
+/// where `T` is the type of value yielded by the generator and `Return` is
+/// the type of the return value.
 ///
 /// NOTE: In many cases it may be advisable to have `T` be a pointer to a type,
 /// particularly if the the yielded type is larger than a machine word.
