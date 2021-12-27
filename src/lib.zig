@@ -61,8 +61,6 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
         gen_state: *StateUnion(Return) = undefined,
 
         is_done: bool = false,
-        // finish() uses to signal this that the resumption is impossible
-        no_resume: bool = false,
         // frame saved by `Handle.yield`
         frame: *@Frame(yield) = undefined,
         gen_frame: anyframe = undefined,
@@ -110,7 +108,6 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
         pub fn finish(self: *Self, return_value: Return) void {
             suspend {
                 self.gen_state.* = .{ .Done = return_value };
-                self.no_resume = true;
                 self.done();
             }
             unreachable;
@@ -241,7 +238,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
 
             if (self.handle.is_done) {
                 var err: ?Err = null;
-                if (!self.handle.no_resume) {
+                if (@as(State, self.state) != .Done) {
                     self.state = .{ .Done = await self.frame catch |err_| error_handler: {
                         switch (err_) {
                             error.GeneratorCancelled => {},
