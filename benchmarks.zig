@@ -15,17 +15,19 @@ pub fn benchDrain() !void {
     std.debug.print("\n=== Benchmark: generator draining\n", .{});
 
     const ty = struct {
-        pub fn generate(_: *@This(), handle: *Handle(u8)) !u8 {
-            try handle.yield(0);
-            try handle.yield(1);
-            try handle.yield(2);
+        n: usize,
+        pub fn generate(self: *@This(), handle: *Handle(u8)) !u8 {
+            while (self.n > 0) {
+                try handle.yield(1);
+                self.n -= 1;
+            }
             return 3;
         }
     };
 
     // ensure they behave as expected
     const G = Generator(ty, u8);
-    var g = G.init(ty{});
+    var g = G.init(ty{ .n = 1 });
 
     try g.drain();
     try expect(g.state.Returned == 3);
@@ -34,8 +36,11 @@ pub fn benchDrain() !void {
 
     const bench = @import("bench");
     try bench.benchmark(struct {
-        pub fn return_value() !void {
-            var gen = G.init(ty{});
+        pub const args = [_]usize{ 1, 2, 3, 5, 10, 100 };
+        pub const arg_names = [_][]const u8{ "1", "2", "3", "5", "10", "100" };
+
+        pub fn return_value(n: usize) !void {
+            var gen = G.init(ty{ .n = n });
             try gen.drain();
             try expect(gen.state.Returned == 3);
         }
