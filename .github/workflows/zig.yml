@@ -23,6 +23,8 @@ jobs:
       - uses: yrashk/actions-setup-zigmod@v1_1
         with:
           version: v89
+      - run: mkdir .zigmod\deps
+        if: ${{matrix.os == 'windows-latest'}}
       - run: zigmod version
       - run: zigmod ci
       - run: zig build test
