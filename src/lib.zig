@@ -8,7 +8,7 @@
 //! const gen = @import("./src/lib.zig");
 //! 
 //! const Ty = struct {
-//!     pub fn generate(_: *@This(), handle: *gen.Handle(u8, u8)) !u8 {
+//!     pub fn generate(_: *@This(), handle: *gen.Handle(u8)) !u8 {
 //!         try handle.yield(0);
 //!         try handle.yield(1);
 //!         try handle.yield(2);
@@ -38,37 +38,25 @@ pub const Cancellation = error{
     GeneratorCancelled,
 };
 
-pub const State = enum { Initialized, Started, Error, Returned };
-
-fn StateUnion(comptime Return: type) type {
-    return union(State) {
-        Initialized: void,
-        Started: void,
-        Error: void,
-        Returned: Return,
-    };
-}
+pub const State = enum { Initialized, Started, Error, Returned, Cancelled };
 
 /// Generator handle, to be used in Handle's Ctx type
 ///
 /// `T` is the type that the generator yields
 /// `Return` is generator's return type
-pub fn Handle(comptime T: type, comptime Return: type) type {
+pub fn Handle(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        const HandleState = enum { Working, Yielded, Cancel, Returned };
+        const HandleState = enum { Working, Yielded, Cancel };
 
         frame: *@Frame(yield) = undefined,
-
-        gen_state: *StateUnion(Return) = undefined,
         gen_frame: ?anyframe = null,
 
         state: union(HandleState) {
             Working: void,
             Yielded: T,
             Cancel: void,
-            Returned: void,
         } = .Working,
 
         /// Yields a value
@@ -84,42 +72,6 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
             self.state = .Working;
         }
 
-        /// Terminates the generator
-        ///
-        /// This approach is faster than returning from an async function, so
-        /// if performance of finishing the generator is important, one should use this function
-        /// instead of function return flow.
-        ///
-        /// NOTE: It is important to understand that if this approach is
-        /// used, generator function's deferred code won't run.
-        /// If deferred code is still desired in such situation, one workaround would be
-        /// put generator's code in a block and call `finish` outside of that block (if feasible):
-        /// ```
-        /// pub fn generate(self: *Self, handle: *generator.Handle(u8, u8)) !u8 {
-        ///     {
-        ///       defer self.deinit();
-        ///       try handle.yield(0);
-        ///     }
-        ///     handle.finish(1);
-        ///     unreachable; // necessary until `finish` becomes `noreturn`
-        /// }
-        /// ```
-        /// 
-        /// Pending resolution of https://github.com/ziglang/zig/issues/5728 should get
-        /// `noreturn` as a return type. For now it's just a promise it'll never return.
-        pub fn finish(self: *Self, return_value: Return) void {
-            suspend {
-                self.gen_state.* = .{ .Returned = return_value };
-                self.done();
-            }
-            unreachable;
-        }
-
-        fn done(self: *Self) void {
-            self.state = .Returned;
-            self.resumeGenerator();
-        }
-
         fn resumeGenerator(self: *Self) void {
             if (self.gen_frame) |frame| {
                 resume frame;
@@ -133,7 +85,7 @@ pub fn Handle(comptime T: type, comptime Return: type) type {
 ///
 /// Ctx type must be a struct and it must have the following function:
 ///
-/// * `generate(self: *@This(), handle: *generator.Handle(T, Return)) !Return`
+/// * `generate(self: *@This(), handle: *generator.Handle(T)) !Return`
 ///
 /// where `T` is the type of value yielded by the generator and `Return` is
 /// the type of the return value.
@@ -166,9 +118,8 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
     assert(arg1_tinfo.Pointer.child == Ctx);
 
     // Handle
-    const Ret = ret_tinfo.ErrorUnion.payload;
     assert(arg2_tinfo == .Pointer);
-    assert(arg2_tinfo.Pointer.child == Handle(T, Ret));
+    assert(arg2_tinfo.Pointer.child == Handle(T));
 
     assert(ret_tinfo == .ErrorUnion);
 
@@ -179,8 +130,15 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
 
         pub const Return = ret_tinfo.ErrorUnion.payload;
         pub const Context = Ctx;
+        pub const GeneratorState = union(State) {
+            Initialized: void,
+            Started: void,
+            Error: Err,
+            Returned: Return,
+            Cancelled: void,
+        };
 
-        handle: Handle(T, Return) = Handle(T, Return){},
+        handle: Handle(T) = Handle(T){},
 
         /// Generator's state
         /// 
@@ -188,9 +146,8 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         /// * `.Started` -- it has been started
         /// * `.Returned` -- it has returned a value
         /// * `.Error` -- it has returned an error
-        state: StateUnion(Return) = .Initialized,
-
-        frame: @Frame(generator) = undefined,
+        /// * `.Cancelled` -- it has been cancelled
+        state: GeneratorState = .Initialized,
 
         /// Generator's own structure
         context: Context,
@@ -202,68 +159,59 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             };
         }
 
-        fn generator(self: *Self) CompleteErrorSet!Return {
-            var result = generate_fn(&self.context, &self.handle) catch |e| {
-                self.handle.done();
-                return e;
-            };
-            self.handle.finish(result);
+        fn generator(self: *Self) void {
+            if (generate_fn(&self.context, &self.handle)) |val| {
+                self.state = .{ .Returned = val };
+            } else |err| {
+                switch (err) {
+                    error.GeneratorCancelled => {
+                        self.state = .Cancelled;
+                    },
+                    else => |e| {
+                        self.state = .{ .Error = e };
+                    },
+                }
+            }
+            self.handle.resumeGenerator();
+            suspend {}
             unreachable;
         }
 
         fn awaitActionable(self: *Self) void {
-            if (self.handle.state == .Working) {
+            if (self.state == .Started and self.handle.state == .Working) {
                 suspend {
                     self.handle.gen_frame = @frame();
                 }
-                std.debug.assert(self.handle.state != .Working);
                 self.handle.gen_frame = null;
             }
         }
 
-        /// Returns the next yielded value, or `null` if the generator has completed
+        /// Returns the next yielded value, or `null` if the generator returned or was cancelled.
+        /// `next()` propagates errors returned by the generator function.
         ///
         /// .state.Returned union variant can be used to retrieve the return value of the generator
-        /// once it has completed.
+        /// .state.Cancelled indicates that the generator was cancelled
+        /// .state.Error union variant can be used to retrieve the error
         ///
-        /// `next()` also propagates errors returned by the generator function.
         pub fn next(self: *Self) Err!?T {
             switch (self.state) {
                 .Initialized => {
                     self.state = .Started;
-                    self.handle.gen_state = &self.state;
-                    self.frame = async self.generator();
+                    _ = async self.generator();
                 },
                 .Started => {
                     resume self.handle.frame;
                 },
-                .Error => return null,
-                .Returned => return null,
+                else => return null,
             }
 
             self.awaitActionable();
 
-            if (self.handle.state == .Returned) {
-                var err: ?Err = null;
-                if (@as(State, self.state) != .Returned) {
-                    self.state = .{ .Returned = await self.frame catch |err_| error_handler: {
-                        switch (err_) {
-                            error.GeneratorCancelled => {},
-                            else => |e| err = e,
-                        }
-                        break :error_handler undefined;
-                    } };
-                }
-
-                if (err) |e| {
-                    self.state = .Error;
-                    return e;
-                }
-
-                return null;
+            switch (self.state) {
+                .Started => return self.handle.state.Yielded,
+                .Error => |e| return e,
+                else => return null,
             }
-
-            return self.handle.state.Yielded;
         }
 
         /// Drains the generator until it is done, returning a pointer to `self.state.Returned`
@@ -291,7 +239,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
 test "basic generator" {
     const expect = std.testing.expect;
     const ty = struct {
-        pub fn generate(_: *@This(), handle: *Handle(u8, void)) !void {
+        pub fn generate(_: *@This(), handle: *Handle(u8)) !void {
             try handle.yield(0);
             try handle.yield(1);
             try handle.yield(2);
@@ -311,7 +259,7 @@ test "basic generator" {
 test "generator with async i/o" {
     const expect = std.testing.expect;
     const ty = struct {
-        pub fn generate(_: *@This(), handle: *Handle(u8, void)) !void {
+        pub fn generate(_: *@This(), handle: *Handle(u8)) !void {
             const file = try std.fs.cwd()
                 .openFile("README.md", std.fs.File.OpenFlags{ .read = true, .write = false });
             const reader = file.reader();
@@ -344,7 +292,7 @@ test "generator with async await" {
             return 1;
         }
 
-        pub fn generate(_: *@This(), handle: *Handle(u8, void)) !void {
+        pub fn generate(_: *@This(), handle: *Handle(u8)) !void {
             try handle.yield(await async doAsync());
         }
     };
@@ -360,7 +308,7 @@ test "context" {
     const ty = struct {
         a: u8 = 1,
 
-        pub fn generate(_: *@This(), handle: *Handle(u8, void)) !void {
+        pub fn generate(_: *@This(), handle: *Handle(u8)) !void {
             try handle.yield(0);
             try handle.yield(1);
             try handle.yield(2);
@@ -376,7 +324,7 @@ test "context" {
 test "errors in generators" {
     const expect = std.testing.expect;
     const ty = struct {
-        pub fn generate(_: *@This(), handle: *Handle(u8, void)) !void {
+        pub fn generate(_: *@This(), handle: *Handle(u8)) !void {
             try handle.yield(0);
             try handle.yield(1);
             return error.SomeError;
@@ -407,7 +355,7 @@ test "return value in generator" {
     const expect = std.testing.expect;
     const ty = struct {
         complete: bool = false,
-        pub fn generate(self: *@This(), handle: *Handle(u8, u8)) !u8 {
+        pub fn generate(self: *@This(), handle: *Handle(u8)) !u8 {
             defer {
                 self.complete = true;
             }
@@ -429,46 +377,10 @@ test "return value in generator" {
     try expect(g.context.complete);
 }
 
-test "fast-path return value in generator (finish)" {
-    const expect = std.testing.expect;
-    const ty = struct {
-        complete: bool = false,
-        inner_complete: bool = false,
-
-        pub fn generate(self: *@This(), handle: *Handle(u8, u8)) !u8 {
-            defer {
-                self.complete = true;
-            }
-            {
-                defer {
-                    self.inner_complete = true;
-                }
-                try handle.yield(0);
-                try handle.yield(1);
-                try handle.yield(2);
-            }
-            handle.finish(3);
-            unreachable;
-        }
-    };
-    const G = Generator(ty, u8);
-    var g = G.init(ty{});
-
-    try expect((try g.next()).? == 0);
-    try expect((try g.next()).? == 1);
-    try expect((try g.next()).? == 2);
-    try expect((try g.next()) == null);
-    try expect(g.state == .Returned);
-    try expect(g.state.Returned == 3);
-
-    try expect(!g.context.complete);
-    try expect(g.context.inner_complete);
-}
-
 test "drain" {
     const expect = std.testing.expect;
     const ty = struct {
-        pub fn generate(_: *@This(), handle: *Handle(u8, u8)) !u8 {
+        pub fn generate(_: *@This(), handle: *Handle(u8)) !u8 {
             try handle.yield(0);
             try handle.yield(1);
             try handle.yield(2);
@@ -489,7 +401,7 @@ test "cancel" {
         drained: bool = false,
         cancelled: bool = false,
 
-        pub fn generate(self: *@This(), handle: *Handle(u8, u8)) !u8 {
+        pub fn generate(self: *@This(), handle: *Handle(u8)) !u8 {
             errdefer |e| {
                 if (e == error.GeneratorCancelled) {
                     self.cancelled = true;
@@ -509,7 +421,7 @@ test "cancel" {
     var g = G.init(ty{});
     g.cancel();
     try expect((try g.next()) == null);
-    try expect(g.state == .Returned);
+    try expect(g.state == .Cancelled);
     try expect(!g.context.drained);
     try expect(g.context.cancelled);
 
@@ -518,7 +430,7 @@ test "cancel" {
     try expect((try g.next()).? == 0);
     g.cancel();
     try expect((try g.next()) == null);
-    try expect(g.state == .Returned);
+    try expect(g.state == .Cancelled);
     try expect(!g.context.drained);
     try expect(g.context.cancelled);
 }
@@ -530,7 +442,7 @@ test "uncooperative cancellation" {
         ignored_termination_0: bool = false,
         ignored_termination_1: bool = false,
 
-        pub fn generate(self: *@This(), handle: *Handle(u8, void)) !void {
+        pub fn generate(self: *@This(), handle: *Handle(u8)) !void {
             handle.yield(0) catch {
                 self.ignored_termination_0 = true;
             };
