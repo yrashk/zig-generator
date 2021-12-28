@@ -66,16 +66,12 @@ pub fn Handle(comptime T: type) type {
             suspend {
                 self.state = .{ .Yielded = t };
                 self.frame = @frame();
-                self.resumeGenerator();
+                if (self.gen_frame) |frame| {
+                    resume frame;
+                }
             }
             if (self.state == .Cancel) return error.GeneratorCancelled;
             self.state = .Working;
-        }
-
-        fn resumeGenerator(self: *Self) void {
-            if (self.gen_frame) |frame| {
-                resume frame;
-            }
         }
     };
 }
@@ -172,18 +168,11 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
                     },
                 }
             }
-            self.handle.resumeGenerator();
+            if (self.handle.gen_frame) |frame| {
+                resume frame;
+            }
             suspend {}
             unreachable;
-        }
-
-        fn awaitActionable(self: *Self) void {
-            if (self.state == .Started and self.handle.state == .Working) {
-                suspend {
-                    self.handle.gen_frame = @frame();
-                }
-                self.handle.gen_frame = null;
-            }
         }
 
         /// Returns the next yielded value, or `null` if the generator returned or was cancelled.
@@ -205,7 +194,12 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
                 else => return null,
             }
 
-            self.awaitActionable();
+            if (self.state == .Started and self.handle.state == .Working) {
+                suspend {
+                    self.handle.gen_frame = @frame();
+                }
+                self.handle.gen_frame = null;
+            }
 
             switch (self.state) {
                 .Started => return self.handle.state.Yielded,
