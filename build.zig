@@ -17,8 +17,9 @@ pub fn build(b: *std.build.Builder) void {
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&tests.step);
 
-    const benchmarks = b.addExecutable("zig-benchmarks", "benchmarks.zig");
+    const benchmarks = b.addExecutable("zig-generator-benchmarks", "benchmarks.zig");
     benchmarks.setBuildMode(.ReleaseFast);
+    benchmarks.install();
 
     const run_benchmarks = benchmarks.run();
     run_benchmarks.step.dependOn(b.getInstallStep());
