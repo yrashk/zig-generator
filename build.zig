@@ -10,7 +10,7 @@ pub fn build(b: *std.build.Builder) void {
     lib.setBuildMode(mode);
     lib.install();
 
-    const tests = b.addTest("src/lib.zig");
+    const tests = b.addTest("src/tests.zig");
     tests.test_evented_io = true;
     tests.setBuildMode(mode);
 

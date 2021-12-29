@@ -1,6 +1,9 @@
 const std = @import("std");
-const Handle = @import("./src/lib.zig").Handle;
-const Generator = @import("./src/lib.zig").Generator;
+
+const generator = @import("generator");
+const Handle = generator.Handle;
+const Generator = generator.Generator;
+const Map = generator.Map;
 
 pub const io_mode = .evented;
 
