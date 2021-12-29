@@ -50,8 +50,11 @@ pub fn Handle(comptime T: type) type {
 
         const HandleState = enum { Working, Yielded, Cancel };
 
+        const Suspension = enum(u8) { Unsuspended, Suspended, Yielded };
+
         frame: *@Frame(yield) = undefined,
-        gen_frame: ?anyframe = null,
+        gen_frame: anyframe = undefined,
+        gen_frame_suspended: std.atomic.Atomic(Suspension) = std.atomic.Atomic(Suspension).init(.Unsuspended),
 
         state: union(HandleState) {
             Working: void,
@@ -66,8 +69,8 @@ pub fn Handle(comptime T: type) type {
             suspend {
                 self.state = .{ .Yielded = t };
                 self.frame = @frame();
-                if (self.gen_frame) |frame| {
-                    resume frame;
+                if (self.gen_frame_suspended.swap(.Yielded, .SeqCst) == .Suspended) {
+                    resume self.gen_frame;
                 }
             }
             if (self.state == .Cancel) return error.GeneratorCancelled;
@@ -168,9 +171,10 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
                     },
                 }
             }
-            if (self.handle.gen_frame) |frame| {
-                resume frame;
+            if (self.handle.gen_frame_suspended.load(.SeqCst) == .Suspended) {
+                resume self.handle.gen_frame;
             }
+
             suspend {}
             unreachable;
         }
@@ -186,6 +190,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
             switch (self.state) {
                 .Initialized => {
                     self.state = .Started;
+                    self.handle.gen_frame = @frame();
                     _ = async self.generator();
                 },
                 .Started => {
@@ -194,11 +199,13 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
                 else => return null,
             }
 
-            if (self.state == .Started and self.handle.state == .Working) {
+            while (self.state == .Started and self.handle.state == .Working) {
                 suspend {
-                    self.handle.gen_frame = @frame();
+                    if (self.handle.gen_frame_suspended.swap(.Suspended, .SeqCst) == .Yielded) {
+                        resume @frame();
+                    }
                 }
-                self.handle.gen_frame = null;
+                self.handle.gen_frame_suspended.store(.Unsuspended, .SeqCst);
             }
 
             switch (self.state) {
