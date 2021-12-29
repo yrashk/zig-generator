@@ -55,18 +55,13 @@ pub fn Join(comptime generators: []const type, comptime T: type) type {
 
         pub fn init(g: init_tuple) Self {
             var s = Self{};
-            inline for (generator_fields_const) |field, i| {
+            inline for (generator_fields_const) |_, i| {
                 s.generators[i] = .{ .generator = g[i] };
-                _ = field;
-                _ = i;
-                _ = g;
             }
             return s;
         }
 
         pub fn generate(self: *Self, handle: *generator.Handle(T)) !void {
-            _ = self;
-            _ = handle;
             var counter = std.atomic.Atomic(usize).init(0);
             var active: usize = self.generators.len;
             var reported: usize = 0;
