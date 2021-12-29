@@ -27,7 +27,7 @@ pub fn Join(comptime generators: []const type, comptime T: type) type {
     inline for (generators) |g, field_index| {
         const G = joinedGenerator(g, T);
         generator_fields[field_index] = .{
-            .name = std.fmt.comptimePrint("{d}:{s}", .{ field_index, @typeName(g) }),
+            .name = std.fmt.comptimePrint("{d}", .{field_index}),
             .field_type = G,
             .default_value = @as(?G, null),
             .is_comptime = false,
