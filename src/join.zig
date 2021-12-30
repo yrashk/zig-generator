@@ -3,11 +3,11 @@ const generator = @import("./generator.zig");
 
 // pending resolution of https://github.com/ziglang/zig/issues/10442,
 // this has to be a function separate from `Join`
-fn joinedGenerator(comptime g: type, comptime T: type) type {
+fn joinedGenerator(comptime g: type, comptime T: type, comptime allocating: bool) type {
     return struct {
         generator: g,
         state: enum { Next, Awaiting, Returned, Done } = .Next,
-        frame: @Frame(next) = undefined,
+        frame: if (allocating) *@Frame(next) else @Frame(next) = undefined,
         fn next(self: *@This(), counter: *std.atomic.Atomic(usize), frame: anyframe) !?T {
             defer {
                 self.state = .Returned;
@@ -20,12 +20,37 @@ fn joinedGenerator(comptime g: type, comptime T: type) type {
     };
 }
 
+fn initializer(
+    comptime Self: type,
+    comptime generators: []const type,
+    generator_fields: []const std.builtin.TypeInfo.StructField,
+    comptime allocating: bool,
+) type {
+    return if (allocating) struct {
+        pub fn init(g: std.meta.Tuple(generators), allocator: std.mem.Allocator) Self {
+            var s = Self{ .allocator = allocator };
+            inline for (generator_fields) |_, i| {
+                s.generators[i] = .{ .generator = g[i] };
+            }
+            return s;
+        }
+    } else struct {
+        pub fn init(g: std.meta.Tuple(generators)) Self {
+            var s = Self{};
+            inline for (generator_fields) |_, i| {
+                s.generators[i] = .{ .generator = g[i] };
+            }
+            return s;
+        }
+    };
+}
+
 /// Joins multiple generators into one and yields values as they come from
 /// either generator
-pub fn Join(comptime generators: []const type, comptime T: type) type {
+pub fn Join(comptime generators: []const type, comptime T: type, comptime allocating: bool) type {
     var generator_fields: [generators.len]std.builtin.TypeInfo.StructField = undefined;
     inline for (generators) |g, field_index| {
-        const G = joinedGenerator(g, T);
+        const G = joinedGenerator(g, T, allocating);
         generator_fields[field_index] = .{
             .name = std.fmt.comptimePrint("{d}", .{field_index}),
             .field_type = G,
@@ -45,23 +70,39 @@ pub fn Join(comptime generators: []const type, comptime T: type) type {
 
     const generator_fields_const = generator_fields;
 
-    const init_tuple = std.meta.Tuple(generators);
-
     return generator.Generator(struct {
         const Self = @This();
 
         generators: @Type(generators_struct) = undefined,
         frame: *@Frame(generate) = undefined,
+        allocator: if (allocating) std.mem.Allocator else void = undefined,
 
-        pub fn init(g: init_tuple) Self {
-            var s = Self{};
-            inline for (generator_fields_const) |_, i| {
-                s.generators[i] = .{ .generator = g[i] };
-            }
-            return s;
-        }
+        pub usingnamespace initializer(Self, generators, &generator_fields_const, allocating);
 
         pub fn generate(self: *Self, handle: *generator.Handle(T)) !void {
+            if (allocating) {
+                inline for (generator_fields_const) |_, i| {
+                    var g = &self.generators[i];
+                    g.frame = self.allocator.create(@Frame(@TypeOf(g.*).next)) catch |e| {
+                        @setEvalBranchQuota(generators.len * 1000);
+                        inline for (generator_fields_const) |_, i_| {
+                            if (i_ == i) return e;
+                            var g_ = &self.generators[i];
+                            self.allocator.destroy(g_.frame);
+                        }
+                    };
+                }
+            }
+
+            defer {
+                if (allocating) {
+                    inline for (generator_fields_const) |_, i| {
+                        var g = &self.generators[i];
+                        self.allocator.destroy(g.frame);
+                    }
+                }
+            }
+
             var counter = std.atomic.Atomic(usize).init(0);
             var active: usize = self.generators.len;
             var reported: usize = 0;
@@ -74,7 +115,10 @@ pub fn Join(comptime generators: []const type, comptime T: type) type {
                             var g = &self.generators[i];
                             if (g.state == .Next) {
                                 g.state = .Awaiting;
-                                g.frame = async g.next(&counter, @frame());
+                                if (allocating)
+                                    g.frame.* = async g.next(&counter, @frame())
+                                else
+                                    g.frame = async g.next(&counter, @frame());
                             }
                         }
                     } else {
@@ -129,7 +173,7 @@ test "basic" {
 
     const G0 = generator.Generator(ty, u8);
     const G1 = generator.Generator(ty1, u8);
-    const G = Join(&[_]type{ G0, G1 }, u8);
+    const G = Join(&[_]type{ G0, G1 }, u8, false);
     var g = G.init(G.Context.init(.{ G0.init(ty{}), G1.init(ty1{}) }));
 
     var sum: usize = 0;
@@ -168,7 +212,7 @@ test "with async i/o" {
         }
     };
     const G0 = generator.Generator(ty, u8);
-    const G = Join(&[_]type{ G0, G0 }, u8);
+    const G = Join(&[_]type{ G0, G0 }, u8, false);
     var g = G.init(G.Context.init(.{ G0.init(ty{}), G0.init(ty{}) }));
 
     // test
@@ -178,4 +222,43 @@ test "with async i/o" {
     }
 
     try expect(size == file_size * 2);
+}
+
+test "memory impact of non-allocating vs allocated frames" {
+    const ty = struct {
+        pub fn generate(_: *@This(), handle: *generator.Handle(u8)) !void {
+            try handle.yield(1);
+            try handle.yield(2);
+            try handle.yield(3);
+        }
+    };
+    const G0 = generator.Generator(ty, u8);
+    const GAllocating = Join(&[_]type{G0} ** 100, u8, true);
+    const GNonAllocating = Join(&[_]type{G0} ** 100, u8, false);
+
+    _ = GNonAllocating.init(GNonAllocating.Context.init(.{ G0.init(ty{}), G0.init(ty{}) }));
+    _ = GAllocating.init(GAllocating.Context.init(.{ G0.init(ty{}), G0.init(ty{}) }, std.testing.allocator));
+
+    try std.testing.expect(@sizeOf(GAllocating) < @sizeOf(GNonAllocating));
+}
+
+test "allocating join" {
+    const expect = std.testing.expect;
+
+    const ty = struct {
+        pub fn generate(_: *@This(), handle: *generator.Handle(u8)) !void {
+            try handle.yield(1);
+            try handle.yield(2);
+            try handle.yield(3);
+        }
+    };
+    const G0 = generator.Generator(ty, u8);
+    const G = Join(&[_]type{G0}, u8, true);
+
+    var g = G.init(G.Context.init(.{G0.init(ty{})}, std.testing.allocator));
+
+    try expect((try g.next()).? == 1);
+    try expect((try g.next()).? == 2);
+    try expect((try g.next()).? == 3);
+    try expect((try g.next()) == null);
 }
