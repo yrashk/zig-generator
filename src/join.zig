@@ -98,7 +98,8 @@ pub fn Join(comptime generators: []const type, comptime T: type, comptime alloca
                 if (allocating) {
                     inline for (generator_fields_const) |_, i| {
                         var g = &self.generators[i];
-                        self.allocator.destroy(g.frame);
+                        if (g.state != .Done)
+                            self.allocator.destroy(g.frame);
                     }
                 }
             }
@@ -140,6 +141,8 @@ pub fn Join(comptime generators: []const type, comptime T: type, comptime alloca
                                 try handle.yield(v);
                                 g.state = .Next;
                             } else {
+                                if (allocating)
+                                    self.allocator.destroy(g.frame);
                                 g.state = .Done;
                                 active -= 1;
                             }
