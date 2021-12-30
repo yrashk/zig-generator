@@ -138,7 +138,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
                     },
                 }
             }
-            if (self.handle.gen_frame_suspended.load(.SeqCst) == .Suspended) {
+            if (self.handle.gen_frame_suspended.swap(.Unsuspended, .SeqCst) == .Suspended) {
                 resume self.handle.gen_frame;
             }
 
