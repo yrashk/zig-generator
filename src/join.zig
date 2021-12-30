@@ -87,7 +87,7 @@ pub fn Join(comptime generators: []const type, comptime T: type, comptime alloca
                         @setEvalBranchQuota(generators.len * 1000);
                         inline for (generator_fields_const) |_, i_| {
                             if (i_ == i) return e;
-                            var g_ = &self.generators[i];
+                            var g_ = &self.generators[i_];
                             self.allocator.destroy(g_.frame);
                         }
                     };
