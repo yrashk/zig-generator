@@ -172,8 +172,8 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
                         resume @frame();
                     }
                 }
-                self.handle.gen_frame_suspended.store(.Unsuspended, .SeqCst);
             }
+            self.handle.gen_frame_suspended.store(.Unsuspended, .SeqCst);
 
             switch (self.state) {
                 .Started => {
