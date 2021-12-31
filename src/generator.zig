@@ -118,6 +118,8 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
         /// Generator's own structure
         context: Context,
 
+        generator_frame: @Frame(generator) = undefined,
+
         /// Initializes a generator
         pub fn init(ctx: Ctx) Self {
             return Self{
@@ -158,7 +160,7 @@ pub fn Generator(comptime Ctx: type, comptime T: type) type {
                 .Initialized => {
                     self.state = .Started;
                     self.handle.gen_frame = @frame();
-                    _ = async self.generator();
+                    self.generator_frame = async self.generator();
                 },
                 .Started => {
                     resume self.handle.frame;
