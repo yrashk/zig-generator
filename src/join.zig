@@ -227,7 +227,7 @@ test "with async i/o" {
     try expect(size == file_size * 2);
 }
 
-test "memory impact of non-allocating vs allocated frames" {
+test "memory impact of not allocating vs allocating frames" {
     const ty = struct {
         pub fn generate(_: *@This(), handle: *generator.Handle(u8)) !void {
             try handle.yield(1);
