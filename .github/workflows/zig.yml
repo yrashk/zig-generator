@@ -26,8 +26,18 @@ jobs:
       - run: zig version
       - run: zig env
       - uses: nektro/actions-setup-zigmod@v1
+        if: ${{matrix.os != 'windows-latest'}}
+      - run: $env:PATH += ';.'
+        if: ${{matrix.os == 'windows-latest'}}
       - run: zigmod version
+        if: ${{matrix.os != 'windows-latest'}}
       - run: zigmod ci
+        if: ${{matrix.os != 'windows-latest'}}
+      - run: .\zigmod version
+        if: ${{matrix.os == 'windows-latest'}}
+      - run: .\zigmod ci
+        if: ${{matrix.os == 'windows-latest'}}
+
       - run: zig build test
   lint:
     runs-on: ubuntu-latest
