@@ -10,13 +10,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        known-failure: [false]
-        include:
-          - os: windows-latest
-            known-failure: true
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{matrix.os}}
-    continue-on-error: ${{matrix.known-failure}}
     steps:
       - uses: actions/checkout@v2
       - uses: goto-bus-stop/setup-zig@v1
@@ -25,7 +20,9 @@ jobs:
 
       - run: zig version
       - run: zig env
-      - uses: nektro/actions-setup-zigmod@v1
+      - uses: yrashk/actions-setup-zigmod@v1_1
+        with:
+          version: 91
       - run: zigmod version
       - run: zigmod ci
       - run: zig build test
